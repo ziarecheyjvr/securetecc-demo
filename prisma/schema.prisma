@@ -1,0 +1,1073 @@
+generator client {
+  provider      = "prisma-client"
+  output        = "../src/generated/prisma"
+  // Vercel's serverless runtime is rhel-openssl-3.0.x. Declaring it
+  // explicitly (rather than relying on "native" platform detection at
+  // generate time) guarantees that engine binary exists in the build
+  // output -- see next.config.ts's outputFileTracingIncludes, which is
+  // what then gets it into the deployed function bundle.
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  // Runtime connections go through Supabase's TRANSACTION pooler (port 6543)
+  // with ?pgbouncer=true&connection_limit=1. Session mode (5432) hands each
+  // client a dedicated Postgres connection for its whole session and caps out
+  // at 15 -- serverless functions exhaust that almost immediately, surfacing as
+  // "FATAL: (EMAXCONNSESSION) max clients reached in session mode".
+  url       = env("DATABASE_URL")
+  // Migrations and introspection can't run over the transaction pooler
+  // (advisory locks / prepared statements), so they use the session pooler.
+  directUrl = env("DIRECT_URL")
+}
+
+enum UserRole {
+  admin
+  technician
+}
+
+/// Task urgency. Named rather than numbered so the value reads the same in the
+/// database as it does in the UI.
+enum TaskPriority {
+  Low
+  Medium
+  High
+  Urgent
+}
+
+/// Where a delegated task is in its life. ForReview is the point the work is
+/// done but the delegator hasn't signed it off -- the distinction that makes
+/// this a delegation tool rather than a to-do list.
+enum TaskStatus {
+  NotStarted
+  InProgress
+  ForReview
+  Completed
+}
+
+/// How often a client should be invoiced.
+///
+/// Quarterly exists because some clients are billed in batches, but Tony's
+/// rule is that nothing goes longer than a quarter unbilled -- this is what
+/// the "needs billing" reminder measures against.
+enum BillingCadence {
+  Monthly
+  Quarterly
+}
+
+/// Where a client sits relative to the normal service area, which is what
+/// decides the on-site minimum and whether travel is billed one way or both.
+enum ServiceArea {
+  InArea
+  OutOfArea
+}
+
+/// "How did you hear about us?", answered at intake.
+enum LeadSource {
+  Website
+  GoogleBusinessProfile
+  SEO
+  Campaign
+  Referral
+  ExistingClient
+  ReturningClient
+  /// A client who was already here before any of this was tracked --
+  /// distinct from "nobody ever recorded it", which is a gap to be filled
+  /// rather than an answer.
+  Legacy
+  Other
+}
+
+/// How a recurring business cost repeats.
+enum ExpenseFrequency {
+  Monthly
+  Annual
+  OneOff
+}
+
+enum BillingType {
+  Hourly
+  Retainer
+}
+
+enum BillableStatus {
+  Billable
+  NonBillable
+  Residual
+}
+
+enum BillingFrequency {
+  Monthly
+  Annual
+}
+
+/// Draft is a working document -- editable, and its time entries can still be
+/// pulled back. Invoiced is the commitment: the numbers are final and the
+/// document is real, whether or not it has been emailed yet. Sending is a
+/// separate, later fact, because plenty of invoices go out by hand or get paid
+/// off a downloaded PDF and never pass through the mail path at all.
+/// How a client actually paid. Recorded per invoice so "what share of our
+/// money arrives by check" is answerable without asking Tony.
+enum PaymentMethod {
+  Check
+  Cash
+  ACH
+  Zelle
+  PayPal
+  Venmo
+  /// Merchant / credit-card services. Tony expects to add these later; having
+  /// the value now means the first card payment doesn't land in "Other".
+  Card
+  Other
+}
+
+enum InvoiceStatus {
+  Draft
+  Invoiced
+  Sent
+  Paid
+}
+
+/// Structured category for a recurring charge ("add-on"), replacing a free-text
+/// guess at what a charge is for. `Other` covers anything not in the fixed set
+/// AddonPricing has a default rate for.
+/// What a recurring charge IS, which is also what decides the order it is
+/// listed in on a client record. Alphabetical put "Antivirus" above the site
+/// fee; these are ranked by how central they are to the business instead --
+/// see RECURRING_CATEGORY_ORDER in lib/recurring-order.ts.
+enum AddonItemType {
+  SiteFee
+  RMM
+  EmailSecurity
+  DMARC
+  MonitoringSeat
+  RemoteMonitoring
+  Other
+}
+
+/// Where a TimeEntry originated -- purely provenance/audit, never affects
+/// billing logic. Manual is the default so existing rows need no backfill.
+enum TimeEntrySource {
+  Manual
+  Voice
+  CsvImport
+}
+
+/// Five tiers, matching the v1 client portal's published response-time SLAs:
+/// Emergency 1h, Critical 4h, High 8h, Medium 24h, Low 48h (business hours).
+enum TicketUrgency {
+  Emergency
+  Critical
+  High
+  Medium
+  Low
+}
+
+/// The ticket lifecycle.
+///
+/// WaitingOnClient exists to stop the clock honestly: a ticket blocked on
+/// information, access or approval is not "in progress", and counting it as
+/// such makes response times look worse than they are and hides which tickets
+/// actually need a technician right now.
+///
+/// Completed (the work is done) and Closed (the ticket is finalised) stay
+/// distinct so a client can come back on something just finished without it
+/// having to be reopened from an archive.
+enum TicketStatus {
+  New
+  InProgress
+  WaitingOnClient
+  Completed
+  Closed
+}
+
+model Organization {
+  id                      String   @id @default(uuid())
+  name                    String
+  logoUrl                 String?
+  brandColorPrimary       String   @default("#071E37")
+  brandColorAccent        String   @default("#06E1DC")
+  /// The REAL, monitored inbox. Two distinct jobs, both of which need a human
+  /// reading them: it's the `to:` for internal new-ticket alerts, and the
+  /// `replyTo:` on client-facing mail. Deliberately NOT the `from:` — see
+  /// notificationFromEmail.
+  supportEmail            String   @unique
+  /// The `from:` for automated Resend mail (ticket confirmations, status
+  /// changes, digests). Split out from supportEmail because outbound sending
+  /// moved to a dedicated subdomain (noreply@alerts.securetecc.com) so its SPF
+  /// record stays independent of the root domain's Google Workspace one.
+  /// A noreply sender must never be the to:/replyTo: — that black-holes both
+  /// internal alerts and client replies. Falls back to supportEmail when unset.
+  notificationFromEmail   String?
+  // From address used specifically for outbound invoice emails (may differ
+  // from supportEmail — e.g. a named staff mailbox rather than a shared inbox).
+  invoiceFromEmail        String?
+  /// Where ticket traffic is WATCHED: new-ticket alerts and the weekly open
+  /// ticket digest. Separate from supportEmail because that address is also
+  /// the reply-to on client mail and so has to stay the public one, while
+  /// where the team actually watches tickets is an internal choice — a shared
+  /// inbox, a channel bridge, a notification app. Falls back to supportEmail
+  /// when unset, which is what it did before this existed.
+  ticketNotificationEmail String?
+  phone                   String?
+  // Manual onboarding checklist flag: domain/DKIM verified in Resend.
+  // Sends are blocked until this is true — see lib/email.
+  emailDomainVerified     Boolean  @default(false)
+  /// Monthly invoicing target the dashboard meter reads against. A business
+  /// number, so it lives in the DB and is editable in Settings → Organization
+  /// rather than being a constant someone has to redeploy to change.
+  monthlyRevenueGoal      Decimal  @default(10000) @db.Decimal(10, 2)
+  /// Days after an invoice is sent that payment is due. Drives the due date
+  /// and the ageing report; a business term, so it lives here rather than as
+  /// a constant nobody can change.
+  paymentTermsDays        Int      @default(30)
+  createdAt               DateTime @default(now())
+
+  // --- Invoice letterhead -------------------------------------------------
+  // The invoice PDF's letterhead names an individual biller (e.g. the owner),
+  // not the org itself -- distinct from `name` above. `phone` (below the
+  // relations) doubles as the letterhead's "Office:" line; these are the
+  // fields with no existing equivalent. All optional: invoices just render
+  // the corresponding line blank until Settings → Organization is filled in.
+  billerName             String?
+  billerAddress1         String?
+  billerAddress2         String?
+  billerCityStateZip     String?
+  billerMobilePhone      String?
+  billerEmail            String?
+  website                String?
+  // Invoice PDF's "FOR:" row. Falls back to "IT Services" at render time when null.
+  invoiceForLabel        String?
+  checkPayableTo         String?
+  acceptedPaymentMethods String?
+  // Per-org ticket counter, incremented atomically alongside ticket creation
+  // to produce TKT-0001 (same approach as Client.lastInvoiceSequence).
+  // Phase 6 note: the Sheets migration must seed this to the highest existing
+  // ticket number, NOT leave it at 0.
+  lastTicketSequence     Int     @default(0)
+
+  users                    User[]
+  clients                  Client[]
+  serviceTypes             ServiceType[]
+  timeEntries              TimeEntry[]
+  reimbursableExpenses     ReimbursableExpense[]
+  recurringCharges         RecurringCharge[]
+  recurringChargeAuditLogs RecurringChargeAuditLog[]
+  addonPricing             AddonPricing[]
+  invoiceRecurringCharges  InvoiceRecurringCharge[]
+  invoiceRetainerPeriods   InvoiceRetainerPeriod[]
+  invoices                 Invoice[]
+  tickets                  Ticket[]
+  tasks                    Task[]
+  emailSignatures          EmailSignature[]
+  payments                 Payment[]
+  businessExpenses         BusinessExpense[]
+
+  @@map("organizations")
+}
+
+model User {
+  id                   String       @id @default(uuid())
+  organizationId       String
+  organization         Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  // Mirrors Supabase auth.users.id — this row is the app-side profile/role record.
+  authUserId           String       @unique
+  name                 String
+  email                String
+  role                 UserRole     @default(technician)
+  /// Whether ticket mail addressed to this person individually (a ticket
+  /// assigned to them) reaches their inbox. Shared-inbox mail is unaffected --
+  /// that goes to ticketNotificationEmail, not here. On by default: someone
+  /// handed a ticket should hear about it unless they say otherwise.
+  /// Where this person works from, as an IANA zone. Their availability is
+  /// stored in THIS zone's wall-clock time, so "9 to 6" stays true for them
+  /// whatever another country does with its clocks.
+  timeZone             String       @default("America/Los_Angeles")
+  /// Free text under their name on the Team page -- "IT Support", "VA",
+  /// whatever they want colleagues to see.
+  jobTitle             String?
+  /// Roughly when they stop being reachable, as minutes past midnight in
+  /// their own zone. Not a working hour and never counted as one -- it
+  /// answers "is a message now going to wake them", which across a 15-hour
+  /// gap is a question the sender cannot answer in their head.
+  offlineAfterMinutes  Int?
+  /// Anything about their availability that is not a block: "flexible outside
+  /// core hours", "no meetings before 10". Shown under their name.
+  availabilityNote     String?
+  /// Roughly how many hours a week this person actually gives SecureTECC,
+  /// when the fixed blocks do not tell the whole story -- work squeezed in
+  /// around other clients is real, and a week showing one booked hour would
+  /// otherwise read as one hour of capacity.
+  estimatedWeeklyHours Int?
+  receivesTicketEmails Boolean      @default(true)
+  /// Told when a task is assigned to them.
+  notifyTaskAssigned   Boolean      @default(true)
+  /// Told when a task they delegated is marked ready for review.
+  notifyTaskForReview  Boolean      @default(true)
+  /// Told when a task they delegated is completed.
+  notifyTaskCompleted  Boolean      @default(true)
+  /// Storage path in the private "avatars" bucket, not a URL -- the bucket is
+  /// private, so what's shown is a short-lived signed URL minted per request.
+  avatarPath           String?
+  /// Who may CREATE and ASSIGN tasks. A per-user flag rather than a role
+  /// check, because role=admin is already held by more than one person here
+  /// and delegation is specifically the business owner's function. Explicit
+  /// beats an email address hard-coded in application logic.
+  canDelegateTasks     Boolean      @default(false)
+  /// Birthday as month/day integers rather than a Date. Only the day matters
+  /// for a greeting, and storing a timestamp would mean a date-only value
+  /// crossing timezones -- the exact bug that shifted the digest window and
+  /// every imported time entry. Ints cannot drift. The year is deliberately
+  /// not collected: it isn't needed and it's the sensitive half.
+  birthMonth           Int?
+  birthDay             Int?
+  createdAt            DateTime     @default(now())
+
+  emailSignatures            EmailSignature[]
+  recordedPayments           Payment[]
+  loggedTimeEntries          TimeEntry[]             @relation("LoggedByUser")
+  performedTimeEntries       TimeEntry[]             @relation("PerformedByUser")
+  assignedTasks              Task[]                  @relation("TaskAssignee")
+  taskAssignments            TaskAssignee[]
+  availability               UserAvailability[]
+  availabilityExceptions     AvailabilityException[]
+  delegatedTasks             Task[]                  @relation("TaskCreator")
+  loggedReimbursableExpenses ReimbursableExpense[]
+  assignedTickets            Ticket[]                @relation("AssignedToUser")
+
+  @@unique([organizationId, email])
+  @@index([organizationId])
+  @@map("users")
+}
+
+model Client {
+  id                    String         @id @default(uuid())
+  organizationId        String
+  organization          Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name                  String
+  shortName             String
+  /// The person who owns the business. Renamed from contactName: it was doing
+  /// two jobs, and whoever signs the contract is rarely whoever pays the bill.
+  ownerName             String?
+  /// Who to address billing correspondence to, when that isn't the owner.
+  billingContactName    String?
+  /// Billing email -- where invoices are sent. Named `email` from before there
+  /// was more than one kind of contact on a client.
+  email                 String?
+  phone                 String?
+  address1              String?
+  address2              String?
+  cityStateZip          String?
+  /// Human-readable id carried over from the Operations Master Sheet
+  /// ("CLI-016"). Distinct from `id` (a uuid) and from `shortName` (the
+  /// invoice-number prefix) -- this exists so rows can be reconciled against
+  /// the spreadsheet by eye. Null for clients the sheet never numbered.
+  reference             String?
+  billingType           BillingType    @default(Hourly)
+  /// Monthly unless set otherwise. Drives the billing reminder, not the
+  /// invoice generator -- Tony still decides when to raise one.
+  billingCadence        BillingCadence @default(Monthly)
+  billingRate           Decimal?       @db.Decimal(10, 2)
+  /// A rate change already agreed but not yet in force -- e.g. everyone moving
+  /// to $125/hr on 1 Jan 2027. Applied automatically to entries DATED on or
+  /// after scheduledRateFrom, so the change lands by itself and nobody has to
+  /// remember to edit 30 client records that morning.
+  scheduledRate         Decimal?       @db.Decimal(10, 2)
+  scheduledRateFrom     DateTime?      @db.Date
+  /// Whether this client is inside the normal service area. Drives the on-site
+  /// minimum and how travel is billed -- see lib/billing/travel.ts.
+  serviceArea           ServiceArea    @default(InArea)
+  /// Where this client came from, recorded at intake before any work is
+  /// scheduled. Null means it was never recorded.
+  leadSource            LeadSource?
+  /// The detail behind the answer -- which campaign, who referred them.
+  leadSourceNote        String?
+  /// The day the client relationship began.
+  relationshipStartedOn DateTime?      @db.Date
+  activeStatus          Boolean        @default(true)
+  /// SecureTECC's own work -- internal or shared jobs that are logged so the
+  /// time is visible but must never be billed. Entries against an internal
+  /// client are forced NonBillable and the client is left out of billing.
+  isInternal            Boolean        @default(false)
+  notes                 String?
+  createdAt             DateTime       @default(now())
+  // Per-client invoice counter, incremented atomically inside the same
+  // transaction that creates an Invoice (see invoices/actions.ts) to produce
+  // {shortName}-{00001}. Never decremented -- a voided invoice keeps its
+  // number, matching normal accounting practice.
+  // Phase 6 note: the Sheets migration must seed this to each client's
+  // highest existing invoice number, NOT leave it at 0.
+  lastInvoiceSequence   Int            @default(0)
+
+  timeEntries          TimeEntry[]
+  reimbursableExpenses ReimbursableExpense[]
+  recurringCharges     RecurringCharge[]
+  invoices             Invoice[]
+  retainerPeriods      InvoiceRetainerPeriod[]
+  businessExpenses     BusinessExpense[]
+
+  @@unique([organizationId, shortName])
+  @@unique([organizationId, reference])
+  @@index([organizationId])
+  @@map("clients")
+}
+
+model ServiceType {
+  id                  String       @id @default(uuid())
+  organizationId      String
+  organization        Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  code                String
+  label               String
+  billingMinimumHours Decimal      @db.Decimal(5, 2)
+  // Overrides the client's standard billingRate when set (e.g. Low Voltage).
+  rateOverride        Decimal?     @db.Decimal(10, 2)
+  /// An override already agreed for LATER -- on-site going to $150 on 1 Jan
+  /// 2027, say. It takes over by itself, and which applies is decided by the
+  /// date of the WORK, so a December entry written in January still bills at
+  /// December's rate. Without this a rate card change means either editing
+  /// every record on the morning it starts, or setting it early and
+  /// overcharging for the rest of the year.
+  scheduledRate       Decimal?     @db.Decimal(10, 2)
+  scheduledRateFrom   DateTime?    @db.Date
+
+  timeEntries TimeEntry[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+  @@map("service_types")
+}
+
+model TimeEntry {
+  id                String          @id @default(uuid())
+  organizationId    String
+  organization      Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  clientId          String
+  client            Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  date              DateTime        @db.Date
+  durationHours     Decimal         @db.Decimal(5, 2)
+  description       String
+  billableStatus    BillableStatus  @default(Billable)
+  serviceTypeId     String
+  serviceType       ServiceType     @relation(fields: [serviceTypeId], references: [id])
+  /// Rate for THIS entry, overriding the service type and the client. For the
+  /// job that was quoted differently -- Tony asked to be able to change a rate
+  /// on the fly rather than have it permanently locked to the client record.
+  rateOverride      Decimal?        @db.Decimal(10, 2)
+  /// Travel time billed with this entry, in minutes. Separate from
+  /// durationHours so the invoice can show the work and the travel honestly,
+  /// and so changing the travel rule never rewrites recorded work.
+  travelMinutes     Int?
+  /// Optional project within the client ("CMMC Level 1", "M365 migration"),
+  /// so work for one client can be split without inventing extra clients.
+  project           String?
+  // Null while unbilled; set once included on a generated invoice.
+  invoiceId         String?
+  invoice           Invoice?        @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  loggedByUserId    String
+  loggedByUser      User            @relation("LoggedByUser", fields: [loggedByUserId], references: [id])
+  /// Who actually did the work, which is not always who typed it in -- Tony
+  /// logs entries for other people.
+  performedByUserId String
+  performedByUser   User            @relation("PerformedByUser", fields: [performedByUserId], references: [id])
+  // Original voice/text input, kept only when this entry came from the AI parser.
+  rawInput          String?
+  // Provenance only -- never affects billing/rate logic. Defaults to Manual so
+  // every pre-existing row needs no backfill.
+  source            TimeEntrySource @default(Manual)
+  createdAt         DateTime        @default(now())
+
+  @@index([organizationId])
+  @@index([clientId])
+  @@index([invoiceId])
+  @@index([performedByUserId])
+  @@map("time_entries")
+}
+
+/// A one-off billable material/expense cost (e.g. a replacement part), distinct
+/// from TimeEntry (labor). Shaped identically to TimeEntry's billing lifecycle:
+/// invoiceId is null while unbilled, set once included on a generated invoice,
+/// and cleared again if that invoice is voided (see invoices/actions.ts).
+model ReimbursableExpense {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  clientId       String
+  client         Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  date           DateTime     @db.Date
+  /// The sheet's own id ("RB-925653fa"), kept so imported rows can be matched
+  /// against the operations sheet by eye and an import can be undone exactly.
+  /// Same job as Client.reference and Invoice.importedFrom. Null for anything
+  /// created in the app.
+  reference      String?
+  description    String
+  amount         Decimal      @db.Decimal(10, 2)
+  invoiceId      String?
+  invoice        Invoice?     @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  loggedByUserId String
+  loggedByUser   User         @relation(fields: [loggedByUserId], references: [id])
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId])
+  @@index([clientId])
+  @@index([invoiceId])
+  @@map("reimbursable_expenses")
+}
+
+/// A perpetual billing template (e.g. "Managed Antivirus -- $50/mo"), NOT a
+/// one-time event like TimeEntry. It must stay billable every period, so it
+/// deliberately carries no invoiceId: "was this already billed for period X?"
+/// is answered by InvoiceRecurringCharge instead. Retire one with
+/// activeStatus rather than deleting, so historical snapshots keep their FK.
+model RecurringCharge {
+  id               String           @id @default(uuid())
+  organizationId   String
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  clientId         String
+  client           Client           @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  /// "RC-001" from the master sheet; assigned sequentially for new charges.
+  reference        String?
+  description      String
+  amount           Decimal          @db.Decimal(10, 2)
+  /// Free-text context ("18 devices x $25 -- verify count monthly"). Kept on
+  /// the charge itself, not only in the audit log, because it's operational
+  /// detail someone needs while looking at the charge.
+  notes            String?
+  /// Seats/devices/licences. Null for a flat charge that is not counted in
+  /// units -- a site fee is one thing, not "1 of something".
+  quantity         Int?
+  /// Price per unit. amount stays the authoritative figure that gets billed;
+  /// these two explain how it was arrived at, so adding a seat is a visible
+  /// change to the count rather than an unexplained new total.
+  unitPrice        Decimal?         @db.Decimal(10, 2)
+  /// What this service costs SecureTECC each period -- the licence, the seat
+  /// fee, whatever is paid out to deliver it. Null means it costs nothing
+  /// directly. The margin on the charge is the difference, and it is the
+  /// number that says whether a recurring line is worth carrying.
+  cost             Decimal?         @db.Decimal(10, 2)
+  /// When this charge began. Date-only -- it is a calendar fact.
+  startDate        DateTime?        @db.Date
+  billingFrequency BillingFrequency @default(Monthly)
+  activeStatus     Boolean          @default(true)
+  // Structured category + who signed off on it. Both optional -- older/plain
+  // retainer-style charges never need to classify themselves. itemType, when
+  // set, is used only to pre-fill a suggested amount from AddonPricing in the
+  // UI; it never affects billing.
+  itemType         AddonItemType?
+  authorizedBy     String?
+  createdAt        DateTime         @default(now())
+
+  invoiceOccurrences InvoiceRecurringCharge[]
+  auditLog           RecurringChargeAuditLog[]
+
+  @@unique([organizationId, reference])
+  @@index([organizationId])
+  @@index([clientId])
+  @@map("recurring_charges")
+}
+
+/// Append-only history of every create/update to a RecurringCharge, snapshotting
+/// who authorized it and what changed. Rows are inserted alongside the
+/// RecurringCharge write in the same transaction and are never updated or
+/// deleted by application code (see recurring-charge-actions.ts) -- the RLS
+/// migration backs this with no update/delete policy at all.
+model RecurringChargeAuditLog {
+  id                String           @id @default(uuid())
+  organizationId    String
+  organization      Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  recurringChargeId String
+  recurringCharge   RecurringCharge  @relation(fields: [recurringChargeId], references: [id], onDelete: Cascade)
+  action            String // "created" | "updated"
+  itemType          AddonItemType?
+  description       String
+  amount            Decimal          @db.Decimal(10, 2)
+  billingFrequency  BillingFrequency
+  authorizedBy      String
+  notes             String?
+  createdAt         DateTime         @default(now())
+
+  @@index([organizationId])
+  @@index([recurringChargeId])
+  @@map("recurring_charge_audit_log")
+}
+
+/// Reference-only default rate per add-on item type, used purely to pre-fill
+/// the amount field in the UI when an item type is chosen -- never enforced or
+/// read by billing logic (a technician can always override the amount).
+model AddonPricing {
+  organizationId String
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  itemType       AddonItemType
+  defaultRate    Decimal       @db.Decimal(10, 2)
+
+  @@id([organizationId, itemType])
+  @@map("addon_pricing")
+}
+
+/// One row per "this recurring charge was billed on this invoice", with the
+/// description/amount/frequency snapshotted at billing time so a later edit to
+/// the template never retroactively rewrites what a past invoice claimed.
+/// Rows are immutable: inserted during generation, deleted when an invoice is
+/// voided (which correctly re-opens that charge for that period).
+model InvoiceRecurringCharge {
+  id                String           @id @default(uuid())
+  organizationId    String
+  organization      Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoiceId         String
+  invoice           Invoice          @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  recurringChargeId String
+  recurringCharge   RecurringCharge  @relation(fields: [recurringChargeId], references: [id])
+  description       String
+  amount            Decimal          @db.Decimal(10, 2)
+  billingFrequency  BillingFrequency
+  // The specific calendar month (Monthly) or January (Annual) this row
+  // covers -- distinct from the parent Invoice's own periodStart/periodEnd,
+  // which can now span many months. "Already billed?" is checked against
+  // THIS range, not the invoice's, so a charge can't be double-billed by
+  // mixing single-month and multi-month invoice generations for overlapping
+  // months. Backfilled from the parent invoice's period for rows that
+  // predate multi-month invoicing (always single-month, so it's exact).
+  periodStart       DateTime         @db.Date
+  periodEnd         DateTime         @db.Date
+  createdAt         DateTime         @default(now())
+
+  @@index([organizationId])
+  @@index([invoiceId])
+  @@index([recurringChargeId])
+  @@map("invoice_recurring_charges")
+}
+
+model Invoice {
+  id             String         @id @default(uuid())
+  organizationId String
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  clientId       String
+  client         Client         @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  // Format: {ClientShortName}-{00001}, 5-digit zero-padded, sequential per client.
+  invoiceNumber  String
+  periodStart    DateTime       @db.Date
+  periodEnd      DateTime       @db.Date
+  totalHours     Decimal        @db.Decimal(7, 2)
+  totalAmount    Decimal        @db.Decimal(10, 2)
+  status         InvoiceStatus  @default(Draft)
+  /// When the invoice was confirmed as final. Separate from sentAt: an invoice
+  /// can be issued today and posted next week, and "which month does this
+  /// belong to" is answered by this date, not by when it was emailed.
+  issuedAt       DateTime?
+  /// How the client paid. Null until an invoice is marked paid, and still
+  /// optional after -- a payment can be recorded before the method is known.
+  paymentMethod  PaymentMethod?
+  // Storage object path in the private `invoices` bucket (NOT a public URL) --
+  // the app mints a short-lived signed URL on demand. Null until the PDF is
+  // rendered, which happens after the generation transaction commits.
+  pdfUrl         String?
+  // Status alone can't answer "when was this sent?" once it moves to Paid,
+  // and both dates are shown on the list/detail screens.
+  /// Set when the invoice came from the Operations Master Sheet rather than
+  /// being generated here -- holds the sheet's own identifier.
+  ///
+  /// Two jobs. It makes an import precisely reversible (delete exactly these
+  /// rows, nothing else), and it distinguishes "no PDF because the original
+  /// lives in Drive" from "no PDF because rendering failed", which are the
+  /// same null pdfUrl but opposite situations for the person looking at it.
+  importedFrom   String?
+  /// Gmail draft this invoice was written into, so a second click updates
+  /// that draft instead of leaving a pile of identical ones in the mailbox.
+  /// Cleared when the invoice is voided.
+  gmailDraftId   String?
+  sentAt         DateTime?
+  paidAt         DateTime?
+  // Set when the invoice is voided/deleted instead of hard-deleting the row,
+  // so archived PDFs and invoice-number history stay intact.
+  voidedAt       DateTime?
+  createdAt      DateTime       @default(now())
+
+  payments             Payment[]
+  timeEntries          TimeEntry[]
+  reimbursableExpenses ReimbursableExpense[]
+  recurringCharges     InvoiceRecurringCharge[]
+  retainerPeriods      InvoiceRetainerPeriod[]
+  customItems          InvoiceCustomItem[]
+
+  @@unique([organizationId, clientId, invoiceNumber])
+  @@index([organizationId])
+  @@index([clientId])
+  @@map("invoices")
+}
+
+/// One row per "this client's flat retainer was billed for this calendar
+/// month". Retainer clients pay a flat rate per month regardless of hours, so
+/// without a ledger two invoices whose periods both touch March would each
+/// charge March's retainer -- the exact double-billing InvoiceRecurringCharge
+/// prevents for recurring charges. Same shape and same rules: the amount is
+/// snapshotted at billing time so a later change to Client.billingRate never
+/// rewrites history, and rows are deleted when an invoice is voided, which
+/// correctly re-opens that month.
+/// A line added to an invoice by hand, rather than derived from a time entry,
+/// expense or recurring charge.
+///
+/// Exists because those three sources can't express everything that ends up on
+/// a real invoice -- a one-off adjustment, a credit, a discount, work agreed
+/// verbally. Editing the derived lines instead would mean rewriting the
+/// underlying records, which are shared with reporting and other invoices.
+model InvoiceCustomItem {
+  id          String    @id @default(uuid())
+  invoiceId   String
+  invoice     Invoice   @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  /// Optional so a credit or note can carry no date, matching how charge rows render.
+  date        DateTime? @db.Date
+  description String
+  /// Both nullable: a flat adjustment has no hours or rate, only an amount.
+  hours       Decimal?  @db.Decimal(7, 2)
+  rate        Decimal?  @db.Decimal(10, 2)
+  /// Signed on purpose -- a negative amount is how a discount or credit is expressed.
+  amount      Decimal   @db.Decimal(10, 2)
+  /// Keeps hand-added lines in the order they were entered.
+  sortOrder   Int       @default(0)
+  createdAt   DateTime  @default(now())
+
+  @@index([invoiceId])
+  @@map("invoice_custom_items")
+}
+
+model InvoiceRetainerPeriod {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoiceId      String
+  invoice        Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  clientId       String
+  client         Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  /// First/last day of the calendar month this row covers.
+  periodStart    DateTime     @db.Date
+  periodEnd      DateTime     @db.Date
+  /// Client.billingRate as it was when billed.
+  amount         Decimal      @db.Decimal(10, 2)
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId])
+  @@index([clientId])
+  @@index([invoiceId])
+  @@map("invoice_retainer_periods")
+}
+
+model Ticket {
+  id                String        @id @default(uuid())
+  organizationId    String
+  organization      Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  // Format: TKT-0001, sequential per organization.
+  ticketNumber      String
+  clientCompanyName String
+  contactName       String
+  contactEmail      String
+  /// Best number to reach the submitter -- carried over from the v1 portal,
+  /// where urgent issues are often faster to resolve by phone than by email.
+  callbackNumber    String?
+  issueType         String
+  urgency           TicketUrgency @default(Medium)
+  description       String
+  status            TicketStatus  @default(New)
+  assignedToUserId  String?
+  assignedToUser    User?         @relation("AssignedToUser", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+  internalNotes     String?
+  resolvedAt        DateTime?
+  createdAt         DateTime      @default(now())
+
+  attachments TicketAttachment[]
+
+  @@unique([organizationId, ticketNumber])
+  @@index([organizationId])
+  @@index([status])
+  @@map("tickets")
+}
+
+model TicketAttachment {
+  id         String   @id @default(uuid())
+  ticketId   String
+  ticket     Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  // Supabase Storage path: org/{orgId}/{clientCompanyName}/{ticketNumber}/{fileName}
+  fileUrl    String
+  fileName   String
+  uploadedAt DateTime @default(now())
+
+  @@index([ticketId])
+  @@map("ticket_attachments")
+}
+
+/// DB-backed fixed-window rate limiter for the two public, unauthenticated
+/// actions (ticket submission, ticket status lookup) -- an in-memory counter
+/// wouldn't survive across serverless invocations, so the counter itself has
+/// to live somewhere durable. Not tenant data and never touched through
+/// withRLS: see src/lib/rate-limit.ts, which uses the trusted Prisma client
+/// directly (same category as the ticket-sequence increment).
+model RateLimitHit {
+  key         String
+  windowStart DateTime
+  count       Int      @default(1)
+
+  @@id([key, windowStart])
+  @@map("rate_limit_hits")
+}
+
+/// One row per scheduled job per occurrence it has already handled.
+///
+/// Exists because the cron design fires each job at BOTH candidate UTC hours
+/// (the PST and PDT offsets) and lets a Pacific-local gate pick the right one.
+/// That's correct for DST but brittle for failure: when the primary firing was
+/// missed -- a deployment landed in the same second on 2026-08-24 -- the
+/// backup hour was gated out for being an hour late, and the week's digest was
+/// simply lost with nothing reporting it.
+///
+/// The unique constraint IS the lock. A firing claims its occurrence by
+/// inserting; a duplicate insert fails, which is how the second candidate hour
+/// discovers the first already ran. No read-then-write race.
+model CronRun {
+  id        String   @id @default(uuid())
+  /// Route name, e.g. "weekly-digest".
+  jobName   String
+  /// The Pacific date the occurrence belongs to (YYYY-MM-DD). Sufficient for
+  /// all four jobs: the schedule already pins weekly runs to a weekday and
+  /// monthly ones to the 1st, so the date alone identifies the occurrence.
+  periodKey String
+  ranAt     DateTime @default(now())
+
+  @@unique([jobName, periodKey])
+  @@map("cron_runs")
+}
+
+/// A task delegated by the business owner to a VA or partner.
+///
+/// Visible to every staff member in the org by design -- the point is shared
+/// awareness of who is doing what, not private queues. Who may CREATE one is
+/// restricted (User.canDelegateTasks); who may READ one is not.
+model Task {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  title       String
+  description String?
+  priority    TaskPriority @default(Medium)
+  status      TaskStatus   @default(NotStarted)
+
+  /// Date-only. Stored as @db.Date so a deadline can't shift a day across
+  /// timezones the way a timestamp would.
+  startDate DateTime? @db.Date
+  dueDate   DateTime? @db.Date
+
+  /// The PRIMARY assignee, and the one the row is filed under. Every task has
+  /// one; a task with several has the rest in `assignees` alongside it, and
+  /// that table always contains the primary too, so membership is one query
+  /// and the row-level policy has a single thing to check.
+  assignedToUserId String
+  assignedToUser   User           @relation("TaskAssignee", fields: [assignedToUserId], references: [id])
+  assignees        TaskAssignee[]
+  createdByUserId  String
+  createdByUser    User           @relation("TaskCreator", fields: [createdByUserId], references: [id])
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  /// Set when status first reaches Completed, so "finished on" survives a
+  /// later edit that isn't a status change.
+  completedAt DateTime?
+
+  @@index([organizationId])
+  @@index([assignedToUserId])
+  @@index([status])
+  @@map("tasks")
+}
+
+/// A saved HTML email signature, so a Gmail draft can go out looking like the
+/// mail Tony sends by hand instead of bare plain text.
+///
+/// The HTML is stored as generated, not as the fields it was generated from:
+/// the builder measures text with a canvas to size its badges, which only a
+/// browser can do. Re-deriving it server-side is therefore impossible, and a
+/// signature that silently re-flowed after an unrelated code change would be
+/// worse than one frozen at the moment it was saved.
+model EmailSignature {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// Signatures are personal: each person sees and picks from their own.
+  ownerUserId    String
+  ownerUser      User         @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  name           String
+  html           String
+  /// Pre-selected when drafting. At most one per owner, enforced in the
+  /// action by clearing the others in the same transaction.
+  isDefault      Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([ownerUserId, name])
+  @@index([organizationId])
+  @@map("email_signatures")
+}
+
+/// One payment received against an invoice.
+///
+/// A row per payment, not a paid/unpaid flag on the invoice, because part
+/// payments are real here: $2,000 invoiced, $1,000 by ACH now and the rest
+/// later is two facts, and collapsing them loses the balance, both dates and
+/// both references. The invoice keeps `paidAt` and `paymentMethod` as a
+/// summary of these rows -- recomputed on every write, never edited directly.
+///
+/// Deliberately survives a void: what a client actually sent is a fact about
+/// money, and voiding a document does not unsend it.
+model Payment {
+  id               String        @id @default(uuid())
+  organizationId   String
+  organization     Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoiceId        String
+  invoice          Invoice       @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  amount           Decimal       @db.Decimal(10, 2)
+  /// Date-only: when the money was received, which is not necessarily when it
+  /// was entered, and can precede the invoice being sent.
+  receivedAt       DateTime      @db.Date
+  method           PaymentMethod
+  /// What "Other" actually was. Only meaningful when method is Other.
+  methodOther      String?
+  /// Check number, ACH trace, PayPal transaction id -- whatever identifies
+  /// this payment on a bank statement.
+  reference        String?
+  notes            String?
+  recordedByUserId String?
+  recordedByUser   User?         @relation(fields: [recordedByUserId], references: [id], onDelete: SetNull)
+  createdAt        DateTime      @default(now())
+
+  @@index([organizationId])
+  @@index([invoiceId])
+  @@map("payments")
+}
+
+/// A cost the business carries: GoToCentral, the PSA, VoIP, an email service.
+///
+/// Optionally attached to a client, which is what makes "what does this client
+/// cost us against what we bill them" answerable. Costs with no client are
+/// overhead and are reported separately rather than being spread across
+/// clients by some invented allocation -- a made-up split would produce a
+/// per-client profit figure that looks precise and is not.
+model BusinessExpense {
+  id             String           @id @default(uuid())
+  organizationId String
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  vendor         String?
+  category       String?
+  amount         Decimal          @db.Decimal(10, 2)
+  frequency      ExpenseFrequency @default(Monthly)
+  /// Direct cost of serving one client. Null means overhead.
+  clientId       String?
+  client         Client?          @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  startDate      DateTime?        @db.Date
+  /// When it stopped. Null while it is still being paid.
+  endDate        DateTime?        @db.Date
+  activeStatus   Boolean          @default(true)
+  notes          String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@index([organizationId])
+  @@index([clientId])
+  @@map("business_expenses")
+}
+
+/// Who a task is assigned to, when that is more than one person.
+///
+/// Work involving both Zia and Ian is one task with two owners, not two
+/// tasks that drift apart. The primary assignee on the task row is ALSO a row
+/// here, so "am I on this task" is one lookup rather than a column check
+/// ORed with a join -- which is what the row-level policy relies on.
+model TaskAssignee {
+  taskId     String
+  task       Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Everyone assigned gets told; this records that it happened, so a task
+  /// edited five times does not email the same person five times.
+  notifiedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@id([taskId, userId])
+  @@index([userId])
+  @@map("task_assignees")
+}
+
+/// One block of a person's working week.
+///
+/// Stored as minutes past midnight in the PERSON'S OWN zone, not as an
+/// instant and not in UTC. "Zia works 9 to 6 Manila" is a fact about Zia's
+/// clock; converting it to Pacific is a question asked at read time, and the
+/// answer changes twice a year because Pacific observes daylight saving and
+/// Manila does not. Storing an instant would freeze one side of that.
+///
+/// A day can hold more than one block -- a split shift, or a lunch break
+/// carved out of the middle -- which is why this is rows rather than two
+/// columns on the user.
+/// What a block of someone's week IS.
+///
+/// A person can be reliably busy without being available to SecureTECC --
+/// Ian has BBZ Studio hours, Zia has Prodesign. Recording those as plain
+/// availability would have counted them as SecureTECC time and invented
+/// overlap windows nobody can actually meet in; leaving them out entirely
+/// would show empty space where the person is in fact unreachable.
+enum AvailabilityKind {
+  /// Available for SecureTECC work.
+  Work
+  /// Committed elsewhere -- shown on the calendar, never counted as ours.
+  Commitment
+}
+
+model UserAvailability {
+  id           String           @id @default(uuid())
+  userId       String
+  user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// 0 = Sunday … 6 = Saturday, in the person's own zone.
+  weekday      Int
+  /// Minutes past midnight. 540 = 9:00, 1080 = 18:00.
+  startMinutes Int
+  endMinutes   Int
+  /// "Core hours", "On call" -- optional, shown beside the block.
+  label        String?
+  kind         AvailabilityKind @default(Work)
+  createdAt    DateTime         @default(now())
+
+  @@index([userId])
+  @@map("user_availability")
+}
+
+/// What kind of change to someone's usual week one date carries.
+enum AvailabilityExceptionKind {
+  /// Whole day off.
+  Leave
+  /// Not available -- the whole day, or a time range when one is given.
+  Unavailable
+  /// Working, but different hours from usual that day.
+  DifferentHours
+  /// Working, but this time range is taken by another task.
+  Blocked
+}
+
+/// A one-off change to a person's usual hours on one date.
+///
+/// The weekly hours are general availability, not a live schedule. These rows
+/// are how "on leave Friday" or "blocked 2-4pm for the migration" gets onto
+/// the Team page without editing the week everyone else reads as normal.
+model AvailabilityException {
+  id              String                    @id @default(uuid())
+  userId          String
+  user            User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// The date in the PERSON'S own zone, "YYYY-MM-DD".
+  date            String
+  kind            AvailabilityExceptionKind
+  /// Minutes past midnight in the person's zone; null for a whole day.
+  startMinutes    Int?
+  endMinutes      Int?
+  note            String?
+  createdByUserId String?
+  createdAt       DateTime                  @default(now())
+
+  @@index([userId, date])
+  @@map("availability_exceptions")
+}

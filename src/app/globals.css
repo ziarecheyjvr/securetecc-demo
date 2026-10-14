@@ -1,0 +1,448 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  /* Was self-referential (--font-sans: var(--font-sans)), which is an
+     invalid circular value -- the font-sans utility silently fell back to
+     the browser's default serif everywhere in the app. Geist is the font
+     next/font actually loads (layout.tsx sets --font-geist-sans); wire the
+     token to it directly, matching how --font-mono already does below. */
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --font-heading: var(--font-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+  /* SecureTECC brand: navy #071E37 / teal #06E1DC */
+  --brand-navy: #071e37;
+  --brand-teal: #06e1dc;
+
+  /* Light theme, built as the same design in reverse rather than "the dark
+     one with the lights on": a near-white ground with the teal grid over it,
+     white panels lifted off it, and navy carrying the text. Pure #fff for the
+     page would leave the white cards with nothing to sit on. */
+  --paper: #f2f6f9;
+  --edge: rgb(7 30 55 / 0.12);
+  --edge-strong: rgb(6 225 220 / 0.55);
+  /* Teal on white is far too pale to read at label sizes -- 3.0:1 at best.
+     This is the same hue darkened until it carries text, used everywhere the
+     dark theme uses raw teal for type. */
+  --teal-ink: #0b7d80;
+
+  --background: var(--paper);
+  --foreground: var(--brand-navy);
+  --card: oklch(1 0 0);
+  --card-foreground: var(--brand-navy);
+  --popover: oklch(1 0 0);
+  --popover-foreground: var(--brand-navy);
+  --primary: var(--brand-navy);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: var(--brand-navy);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.48 0.02 240);
+  --accent: var(--brand-teal);
+  --accent-foreground: var(--brand-navy);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: var(--edge);
+  --input: rgb(7 30 55 / 0.18);
+  --ring: var(--brand-teal);
+  --chart-1: var(--brand-teal);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --radius: 0.625rem;
+  --sidebar: var(--brand-navy);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: var(--brand-teal);
+  --sidebar-primary-foreground: var(--brand-navy);
+  --sidebar-accent: oklch(1 0 0 / 8%);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 12%);
+  --sidebar-ring: var(--brand-teal);
+}
+
+.dark {
+  /* Deepened toward the signature card's own palette (#04070b void,
+     #070d14 panel) rather than sitting on flat brand navy. Navy stays as the
+     mid-tone the panels are built from, so the brand reads the same -- the
+     app just has depth under it now instead of one uniform slab. */
+  --void: #04070b;
+  --panel: #0a1119;
+  --panel-raised: #0d1721;
+  /* Teal at low alpha, so an edge tints toward the accent instead of the
+     grey a white overlay produces. This is what carries most of the change:
+     every bordered element in the app picks it up at once. */
+  --edge: rgb(6 225 220 / 0.16);
+  --edge-strong: rgb(6 225 220 / 0.34);
+  --teal-ink: var(--brand-teal);
+
+  --background: var(--void);
+  --foreground: oklch(0.985 0 0);
+  --card: var(--panel);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: var(--panel-raised);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: var(--brand-teal);
+  --primary-foreground: var(--brand-navy);
+  --secondary: oklch(0.269 0.02 240);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0.02 240);
+  /* Lifted from 0.708 and tinted toward the teal hue: muted text sits on a
+     darker surface now, and neutral grey read as dirty against it. */
+  --muted-foreground: oklch(0.74 0.02 200);
+  --accent: var(--brand-teal);
+  --accent-foreground: var(--brand-navy);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: var(--edge);
+  --input: rgb(6 225 220 / 0.22);
+  --ring: var(--brand-teal);
+  --chart-1: var(--brand-teal);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --sidebar: #060c13;
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: var(--brand-teal);
+  --sidebar-primary-foreground: var(--brand-navy);
+  --sidebar-accent: rgb(6 225 220 / 0.08);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: var(--edge);
+  --sidebar-ring: var(--brand-teal);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+
+  /* Poppins for headings across the authenticated app, matching the brand
+     typography already used on /login, /support, and securetecc.com. Applied
+     here rather than per-page so every existing and future screen picks it up.
+     Card/dialog titles render as <div data-slot="...">, not heading tags, so
+     they're targeted explicitly. */
+  h1,
+  h2,
+  h3,
+  h4,
+  [data-slot="card-title"],
+  [data-slot="dialog-title"] {
+    font-family: var(--font-poppins), var(--font-sans), sans-serif;
+    letter-spacing: -0.01em;
+  }
+}
+/* --- Data-viz palette -----------------------------------------------------
+   Validated categorical slots (adjacent-pair CVD ΔE 9.1 light / 8.4 dark,
+   normal-vision 19.6 / 19.3), not hand-picked. The dark column is the same
+   five hues re-stepped for a dark surface, not an automatic flip.
+
+   Light slots 3/4/5 sit under 3:1 against the card surface, so every chart
+   using them ships visible direct labels (the "relief rule") -- identity is
+   never carried by colour alone. */
+:root {
+  --viz-1: #2a78d6;
+  --viz-2: #eb6834;
+  --viz-3: #1baf7a;
+  --viz-4: #eda100;
+  --viz-5: #e87ba4;
+  --viz-other: oklch(0.72 0 0);
+  --viz-grid: oklch(0.922 0 0);
+  --viz-track: oklch(0.95 0 0);
+  --viz-good: #1baf7a;
+  --viz-warn: #eda100;
+  --viz-teal: #0e9e9b;
+}
+
+.dark {
+  --viz-1: #3987e5;
+  --viz-2: #d95926;
+  --viz-3: #199e70;
+  --viz-4: #c98500;
+  --viz-5: #d55181;
+  --viz-other: oklch(0.55 0 0);
+  /* Tinted toward the accent so the chart furniture belongs to the same
+     surface as everything else. The five CATEGORICAL slots above are left
+     exactly as validated -- they encode identity, and re-hueing them toward
+     teal would collapse the contrast between adjacent pairs that the
+     validation exists to guarantee. Teal is used for single-series marks
+     instead, where there is nothing to distinguish it from. */
+  --viz-grid: rgb(6 225 220 / 0.12);
+  --viz-track: rgb(6 225 220 / 0.08);
+  --viz-teal: #06e1dc;
+  --viz-good: #199e70;
+  --viz-warn: #c98500;
+}
+
+/* --- Futuristic chrome ----------------------------------------------------
+   The signature card's visual language, applied to the app: a faint teal
+   grid under everything, panels with a lit top edge, and section labels in
+   spaced uppercase.
+
+   Applied through base selectors and a couple of utilities rather than by
+   editing every component, so existing and future screens pick it up without
+   each one having to remember. Nothing here changes layout -- only surface,
+   edge and type treatment -- so a component's spacing can't shift under it.
+
+   Everything is scoped to .dark. /login, /support and /voice-logger hardcode
+   their own colours and are untouched. */
+
+@layer base {
+  .dark body {
+    background-color: var(--void);
+    /* Two hairline grids plus a pool of teal light at the top. 42px matches
+       the signature builder's own grid pitch.
+
+       The theme class sits on <html> (next-themes needs the document element
+       to set it before first paint), so body is addressed as a descendant.
+       It was briefly `body.dark` when the class lived on <body>; getting this
+       pairing wrong makes the grid silently vanish, which is worth a look at
+       whenever the class moves. */
+    background-image:
+      radial-gradient(1100px 520px at 50% -10%, rgb(6 225 220 / 0.12), transparent 62%),
+      repeating-linear-gradient(0deg, rgb(6 225 220 / 0.055) 0 1px, transparent 1px 42px),
+      repeating-linear-gradient(90deg, rgb(6 225 220 / 0.055) 0 1px, transparent 1px 42px);
+    /* Fixed so the grid reads as a surface the content moves over, rather
+       than wallpaper scrolling with it. */
+    background-attachment: fixed;
+  }
+
+  /* Light: the same grid and the same pool of light, at the alphas a white
+     ground needs. Navy does the ruling here rather than teal -- teal lines on
+     white are invisible below about 0.1 alpha and garish above it, whereas
+     navy at 0.05 reads as a drafting grid. The teal stays in the glow. */
+  .light body {
+    background-color: var(--paper);
+    background-image:
+      radial-gradient(1100px 520px at 50% -10%, rgb(6 225 220 / 0.16), transparent 62%),
+      repeating-linear-gradient(0deg, rgb(7 30 55 / 0.05) 0 1px, transparent 1px 42px),
+      repeating-linear-gradient(90deg, rgb(7 30 55 / 0.05) 0 1px, transparent 1px 42px);
+    background-attachment: fixed;
+  }
+
+  /* Card descriptions read as instrument labels: small, spaced, uppercase.
+     Applied here so every card in the app gets it rather than 40 edits.
+     Not theme-scoped -- the treatment is the design, in both themes; only the
+     ink changes, and --teal-ink is what differs between them. */
+  [data-slot="card-description"] {
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-size: 0.6875rem;
+    color: color-mix(in oklab, var(--teal-ink) 72%, var(--muted-foreground));
+  }
+
+  /* Table headers get the same treatment, for the same reason. */
+  th {
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 0.6875rem;
+  }
+
+  /* Figures in mono. Numbers are what this app is for; a monospace face with
+     tabular figures makes columns line up and reads as instrumentation.
+     Scoped to elements already marked tabular-nums, so it only ever hits
+     deliberate figures and never body copy. */
+  .tabular-nums {
+    font-family: var(--font-geist-mono), ui-monospace, monospace;
+    letter-spacing: -0.01em;
+  }
+}
+
+@layer utilities {
+  /* Panels: a navy-to-teal gradient border, plus a top edge that catches the
+     light from the radial pool above so a flat-filled card doesn't look
+     pasted on.
+
+     The gradient border is done with layered backgrounds rather than a
+     pseudo-element, for two reasons. border-image cannot follow
+     border-radius, so it is out; and the usual mask-composite trick needs a
+     ::before, which the stat cards' corner brackets already occupy -- one
+     would have silently deleted the other.
+
+     How it works: the border is transparent, and three background layers are
+     painted through different boxes. The first two clip to padding-box and
+     therefore stop at the inner edge of the border; the last clips to
+     border-box, so it shows ONLY in the 1px ring the others don't cover.
+     Layer order is paint order, topmost first.
+
+     Navy leads into teal on the diagonal, as the brand does. Navy is lifted
+     off its true value because #071E37 against a #04070b page is almost
+     invisible -- a gradient whose first half cannot be seen is just a
+     partial border. */
+  .dark [data-slot="card"],
+  .dark [data-slot="dialog-popup"],
+  .dark [data-slot="popover-popup"] {
+    position: relative;
+    border: 1px solid transparent;
+    background-image:
+      linear-gradient(180deg, rgb(255 255 255 / 0.03), transparent 42%),
+      linear-gradient(var(--card), var(--card)),
+      linear-gradient(
+        135deg,
+        rgb(23 74 122 / 0.85) 0%,
+        rgb(13 132 158 / 0.9) 42%,
+        rgb(6 225 220 / 0.95) 78%,
+        rgb(6 225 220 / 0.55) 100%
+      );
+    background-origin: padding-box, padding-box, border-box;
+    background-clip: padding-box, padding-box, border-box;
+    box-shadow:
+      inset 0 1px 0 rgb(6 225 220 / 0.09),
+      0 18px 40px -32px rgb(0 0 0 / 0.9);
+  }
+
+  /* Light panels: same three-layer construction, same navy-to-teal run.
+     The alphas are higher because a gradient that reads as a lit edge on a
+     near-black page reads as nothing at all on white -- and the shadow is a
+     real drop shadow rather than the dark theme's inset highlight, since on
+     white the card is lifted off the page, not lit from above. */
+  .light [data-slot="card"],
+  .light [data-slot="dialog-popup"],
+  .light [data-slot="popover-popup"] {
+    position: relative;
+    border: 1px solid transparent;
+    background-image:
+      linear-gradient(180deg, rgb(255 255 255 / 0.8), transparent 42%),
+      linear-gradient(var(--card), var(--card)),
+      linear-gradient(
+        135deg,
+        rgb(7 30 55 / 0.55) 0%,
+        rgb(13 132 158 / 0.6) 42%,
+        rgb(6 225 220 / 0.9) 78%,
+        rgb(6 225 220 / 0.45) 100%
+      );
+    background-origin: padding-box, padding-box, border-box;
+    background-clip: padding-box, padding-box, border-box;
+    box-shadow: 0 10px 26px -20px rgb(7 30 55 / 0.45);
+  }
+
+  .light [data-slot="card"]:hover {
+    background-image:
+      linear-gradient(180deg, rgb(255 255 255 / 0.9), transparent 42%),
+      linear-gradient(var(--card), var(--card)),
+      linear-gradient(
+        135deg,
+        rgb(7 30 55 / 0.75) 0%,
+        rgb(13 132 158 / 0.85) 42%,
+        rgb(6 225 220 / 1) 78%,
+        rgb(6 225 220 / 0.7) 100%
+      );
+  }
+
+  /* Hover brightens the whole ring rather than a border-colour, which the
+     transparent border no longer responds to. Same gradient, higher alphas. */
+  .dark [data-slot="card"]:hover {
+    background-image:
+      linear-gradient(180deg, rgb(255 255 255 / 0.045), transparent 42%),
+      linear-gradient(var(--card), var(--card)),
+      linear-gradient(
+        135deg,
+        rgb(31 98 160 / 0.95) 0%,
+        rgb(17 168 200 / 1) 42%,
+        rgb(6 225 220 / 1) 78%,
+        rgb(6 225 220 / 0.8) 100%
+      );
+  }
+
+  /* Corner brackets, as on the signature builder's monitor frame. Drawn with
+     one element's two gradients per corner pair, so it costs no extra DOM. */
+  .brackets::before,
+  .brackets::after {
+    content: "";
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--teal-ink);
+    opacity: 0.55;
+    pointer-events: none;
+  }
+  .brackets::before {
+    top: -1px;
+    left: -1px;
+    border-width: 2px 0 0 2px;
+    border-top-left-radius: 6px;
+  }
+  .brackets::after {
+    bottom: -1px;
+    right: -1px;
+    border-width: 0 2px 2px 0;
+    border-bottom-right-radius: 6px;
+  }
+
+  /* App header. A class rather than an inline style because it has to change
+     with the theme -- as an inline gradient it stayed dark under the light
+     theme while the text switched to navy ink, which made the signed-in
+     user's name invisible against it. */
+  .app-header {
+    border-bottom: 1px solid var(--edge-strong);
+  }
+  .dark .app-header {
+    background: linear-gradient(180deg, rgb(13 23 33 / 0.92), rgb(4 7 11 / 0.96));
+  }
+  .light .app-header {
+    background: linear-gradient(180deg, #ffffff, rgb(242 246 249 / 0.9));
+  }
+
+  /* Spaced uppercase label, for anything not covered by the base rules. */
+  .label-hud {
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    font-size: 0.6875rem;
+    color: var(--teal-ink);
+  }
+
+  /* Dark only: a teal halo behind teal type on white smears rather than
+     glows, and the heading it applies to switches to navy ink there. */
+  .dark .text-glow {
+    text-shadow: 0 0 18px rgb(6 225 220 / 0.45);
+  }
+
+}
