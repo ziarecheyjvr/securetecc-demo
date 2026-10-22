@@ -22,7 +22,7 @@ type Result<T> = Promise<{ data: T | null; error: { message: string } | null }>;
 /** Resolves a bucket/object path, refusing anything that escapes the root. */
 export async function resolveObjectPath(bucket: string, objectPath: string): Promise<string | null> {
   const { path } = await node();
-  const base = path.join(process.cwd(), DEMO_STORAGE_DIR);
+  const base = path.resolve(/*turbopackIgnore: true*/ process.cwd(), DEMO_STORAGE_DIR);
   const full = path.resolve(base, bucket, objectPath);
   return full.startsWith(base + path.sep) ? full : null;
 }

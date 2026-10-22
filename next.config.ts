@@ -86,6 +86,10 @@ const nextConfig: NextConfig = {
       // src/lib/pdf/fonts.ts. Same reason as the logo: not traced otherwise,
       // and without them every invoice silently falls back to Helvetica.
       "./src/lib/pdf/fonts/*.woff",
+      // DEMO BUILD: the database snapshot loaded at startup, and PGlite's
+      // WebAssembly + data files, which it reads from disk at runtime.
+      "./demo-data/snapshot.tar.gz",
+      "./node_modules/@electric-sql/pglite/dist/**/*",
     ],
   },
   // ...but shipping the binary isn't sufficient on its own. Bundling
@@ -95,7 +99,14 @@ const nextConfig: NextConfig = {
   // threw "could not locate the Query Engine". Keeping the package
   // external preserves the real __dirname so the lookup resolves.
   // See https://pris.ly/d/engine-not-found-nextjs
-  serverExternalPackages: ["@prisma/client", ".prisma/client"],
+  // PGlite loads its .wasm/.data files relative to its own module, which
+  // bundling would break -- same reason as Prisma.
+  serverExternalPackages: [
+    "@prisma/client",
+    ".prisma/client",
+    "@electric-sql/pglite",
+    "@electric-sql/pglite-socket",
+  ],
 };
 
 export default withSentryConfig(nextConfig, {

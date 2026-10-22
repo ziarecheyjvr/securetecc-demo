@@ -6,8 +6,8 @@
     "dev": "tsx scripts/demo-db.mts --next",
     "dev:reset": "tsx scripts/demo-db.mts --reset --next",
     "db": "tsx scripts/demo-db.mts",
-    "build": "next build",
-    "start": "next start",
+    "build": "tsx scripts/demo-db.mts --snapshot && next build",
+    "start": "DEMO_DB_IN_PROCESS=1 next start",
     "lint": "eslint",
     "postinstall": "prisma generate && node scripts/stage-prisma-engine.mjs"
   },

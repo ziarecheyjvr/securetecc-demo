@@ -13,5 +13,26 @@ export const DEMO_AUTH_COOKIE = "demo_uid";
 /** Pre-filled on the login screen. Any password is accepted. */
 export const DEMO_LOGIN_EMAIL = "owner@demo.securetecc.example";
 
-/** Where demo "storage buckets" live on disk. */
-export const DEMO_STORAGE_DIR = "demo-data/storage";
+/**
+ * Where demo "storage buckets" live on disk. On Vercel the deployment is
+ * read-only except /tmp, so files go there (and last as long as the instance).
+ */
+export const DEMO_STORAGE_DIR = process.env.VERCEL ? "/tmp/demo-storage" : "demo-data/storage";
+
+/**
+ * The database snapshot `npm run build` writes and a Vercel instance loads
+ * at startup (src/instrumentation.ts -> lib/demo-db-runtime.ts).
+ */
+export const DEMO_SNAPSHOT_FILE = "demo-data/snapshot.tar.gz";
+
+/**
+ * Prisma's connection string for the PGlite socket server.
+ *
+ * pgbouncer=true stops Prisma naming its prepared statements. PGlite is one
+ * backend shared by every connection, so names left by the seed survive into
+ * the app's connection and collide ("prepared statement s0 already exists").
+ * connection_limit=1 because PGlite serves one connection at a time.
+ */
+export function demoDatabaseUrl(port: number): string {
+  return `postgresql://postgres:postgres@127.0.0.1:${port}/postgres?sslmode=disable&connection_limit=1&pgbouncer=true`;
+}

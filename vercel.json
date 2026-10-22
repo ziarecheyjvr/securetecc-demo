@@ -2,19 +2,5 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "regions": [
     "pdx1"
-  ],
-  "crons": [
-    {
-      "path": "/api/cron/auto-close-tickets",
-      "schedule": "0 7,8 * * *"
-    },
-    {
-      "path": "/api/cron/weekly-digest",
-      "schedule": "0 15,16 * * 1"
-    },
-    {
-      "path": "/api/cron/monthly-summary",
-      "schedule": "0 14,15 1 * *"
-    }
   ]
 }

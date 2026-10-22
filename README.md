@@ -25,6 +25,23 @@ npm run dev:reset   # throw the data away and generate a fresh set
 
 `DEMO_SEED=123 npm run dev:reset` produces a different (but repeatable) set.
 
+## Hosting on Vercel
+
+Import the repo into Vercel with the default Next.js settings; no environment
+variables are needed. `npm run build` generates the demo data and saves it as
+`demo-data/snapshot.tar.gz`, and each server instance loads that snapshot into
+memory when it starts (`src/instrumentation.ts`, `src/lib/demo-db-runtime.ts`).
+
+On Vercel:
+
+- Changes made during a demo last until the instance is recycled (after some
+  idle time, or on the next deploy), then the data is back to the snapshot.
+- Two visitors at once may be served by different instances, each with its
+  own copy of the data.
+- Dates are relative to the day of the build. Redeploy to bring them current.
+
+To try the Vercel setup locally: `npm run build && npm start`.
+
 ## How it differs from production
 
 | Production | Demo |

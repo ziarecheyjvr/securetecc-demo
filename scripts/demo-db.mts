@@ -6,6 +6,8 @@
  *   npx tsx scripts/demo-db.mts            # start the database only
  *   npx tsx scripts/demo-db.mts --next     # start it, then `next dev` (npm run dev)
  *   npx tsx scripts/demo-db.mts --reset    # wipe demo-data/ and regenerate everything
+ *   npx tsx scripts/demo-db.mts --snapshot # build a fresh database in memory and save
+ *                                          # it to demo-data/snapshot.tar.gz (npm run build)
  *
  * On first start (or --reset) it applies every Prisma migration, the one
  * Supabase SQL function the public ticket-status page calls, and then runs
@@ -16,31 +18,31 @@
  * in .env), so run one app process against it at a time.
  */
 import { spawn } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, rmSync, mkdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
+import { DEMO_SNAPSHOT_FILE, demoDatabaseUrl } from "../src/lib/demo";
 
 const ROOT = process.cwd();
 const DATA_DIR = path.join(ROOT, "demo-data");
 const PG_DIR = path.join(DATA_DIR, "pg");
 const PORT = Number(process.env.DEMO_DB_PORT ?? 54329);
-// pgbouncer=true stops Prisma naming its prepared statements. PGlite is one
-// backend shared by every connection, so names left by the seed survive into
-// the app's connection and collide ("prepared statement s0 already exists").
-const DATABASE_URL = `postgresql://postgres:postgres@127.0.0.1:${PORT}/postgres?sslmode=disable&connection_limit=1&pgbouncer=true`;
+const DATABASE_URL = demoDatabaseUrl(PORT);
 
 const args = new Set(process.argv.slice(2));
+// Snapshot mode builds in memory and never touches demo-data/pg.
+const snapshot = args.has("--snapshot");
 
 if (args.has("--reset") && existsSync(DATA_DIR)) {
   rmSync(DATA_DIR, { recursive: true, force: true });
   console.log("[demo-db] Wiped demo-data/.");
 }
 
-const fresh = !existsSync(PG_DIR);
+const fresh = snapshot || !existsSync(PG_DIR);
 mkdirSync(DATA_DIR, { recursive: true });
 
-const db = await PGlite.create(PG_DIR);
+const db = snapshot ? await PGlite.create() : await PGlite.create(PG_DIR);
 
 if (fresh) {
   const migrationsDir = path.join(ROOT, "prisma", "migrations");
@@ -94,12 +96,23 @@ if (fresh) {
     run("npx", ["tsx", "prisma/demo-seed.ts"]).on("exit", (c) => resolve(c ?? 1)),
   );
   if (code !== 0) {
-    console.error("[demo-db] Seeding failed; wiping demo-data/ so the next start retries.");
+    console.error(
+      snapshot ? "[demo-db] Seeding failed." : "[demo-db] Seeding failed; wiping demo-data/ so the next start retries.",
+    );
     await server.stop().catch(() => {});
     await db.close().catch(() => {});
-    rmSync(DATA_DIR, { recursive: true, force: true });
+    if (!snapshot) rmSync(DATA_DIR, { recursive: true, force: true });
     process.exit(code);
   }
+}
+
+if (snapshot) {
+  await server.stop();
+  const dump = await db.dumpDataDir("gzip");
+  writeFileSync(path.join(ROOT, DEMO_SNAPSHOT_FILE), Buffer.from(await dump.arrayBuffer()));
+  console.log(`[demo-db] Wrote ${DEMO_SNAPSHOT_FILE} (${Math.round(dump.size / 1024)} KB).`);
+  await db.close();
+  process.exit(0);
 }
 
 if (args.has("--next")) {
