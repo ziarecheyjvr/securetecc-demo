@@ -96,7 +96,21 @@ type GoogleEvent = {
  * can see -- Tony asked for all of his accounts in one place, and a person's
  * calendar list is exactly that: their own plus everything shared with them.
  */
+/**
+ * The demo has no Workspace account behind it, so the week is built from the
+ * clients the demo seed created -- see lib/google/demo-calendar. The real
+ * implementation is kept below, unchanged, as listLiveUpcomingEvents.
+ */
 export async function listUpcomingEvents(args: {
+  timeMin: Date;
+  timeMax: Date;
+  maxPerCalendar?: number;
+}): Promise<CalendarResult> {
+  const { buildDemoEvents } = await import("./demo-calendar");
+  return { ok: true, events: await buildDemoEvents(args) };
+}
+
+export async function listLiveUpcomingEvents(args: {
   timeMin: Date;
   timeMax: Date;
   maxPerCalendar?: number;

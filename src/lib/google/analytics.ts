@@ -142,7 +142,22 @@ async function refusal(response: Response): Promise<AnalyticsResult & { ok: fals
  * Five reports ride in one request so the page costs one round trip and one
  * slice of quota rather than five.
  */
+/**
+ * The demo has no Analytics property behind it, and an empty "not connected"
+ * panel shows nothing about what the tab does, so the figures come from
+ * lib/google/demo-analytics instead. The real implementation is kept below,
+ * unchanged, as loadLiveSiteAnalytics.
+ */
 export async function loadSiteAnalytics(args: {
+  start: Date;
+  endExclusive: Date;
+  timeZone: string;
+}): Promise<AnalyticsResult> {
+  const { buildDemoAnalytics } = await import("./demo-analytics");
+  return { ok: true, data: buildDemoAnalytics(args) };
+}
+
+export async function loadLiveSiteAnalytics(args: {
   start: Date;
   endExclusive: Date;
   timeZone: string;
