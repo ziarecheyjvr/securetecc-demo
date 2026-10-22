@@ -14,7 +14,14 @@ import { DEMO_SNAPSHOT_FILE, demoDatabaseUrl } from "@/lib/demo";
  * during a demo last until that instance is recycled, then it starts fresh.
  */
 export async function startInProcessDemoDb(): Promise<void> {
-  const snapshot = await readFile(path.join(/*turbopackIgnore: true*/ process.cwd(), DEMO_SNAPSHOT_FILE));
+  const file = path.join(/*turbopackIgnore: true*/ process.cwd(), DEMO_SNAPSHOT_FILE);
+  const snapshot = await readFile(file).catch((err: unknown) => {
+    throw new Error(
+      `[demo-db] No database snapshot at ${file}. It is written by \`npm run build\` ` +
+        `(scripts/demo-db.mts --snapshot); a plain \`next build\` skips it.`,
+      { cause: err },
+    );
+  });
   const db = await PGlite.create({
     loadDataDir: new File([snapshot], "snapshot.tar.gz", { type: "application/x-gzip" }),
   });

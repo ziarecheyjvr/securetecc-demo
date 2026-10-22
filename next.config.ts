@@ -90,6 +90,9 @@ const nextConfig: NextConfig = {
       // WebAssembly + data files, which it reads from disk at runtime.
       "./demo-data/snapshot.tar.gz",
       "./node_modules/@electric-sql/pglite/dist/**/*",
+      "./node_modules/@electric-sql/pglite-socket/dist/**/*",
+      "./node_modules/@electric-sql/pglite-socket/package.json",
+      "./node_modules/@electric-sql/pglite/package.json",
     ],
   },
   // ...but shipping the binary isn't sufficient on its own. Bundling
